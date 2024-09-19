@@ -1,4 +1,9 @@
 #include <libwebsockets.h>
+#include <openssl/rsa.h>
+#include <openssl/pem.h>
+#include <openssl/sha.h>
+#include <openssl/err.h>
+#include <cjson/cJSON.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
