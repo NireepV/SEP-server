@@ -1,12 +1,22 @@
 import websocket as ws
 import json
+import rel
 
-server_socket = None
+sockets = []
+known_servers = []
 
-def connect_server(address, port):
+def recv_message(wsapp, message):
+    print("Message from server: " + wsapp.url)
+    print(message)
+
+def connect_server(address, port, sockets):
     # establish server connection
-    global server_socket
-    server_socket = ws.create_connection(f"ws://{address}:{port}")
+    #new_socket = ws.create_connection(f"ws://{address}:{port}")
+    socket_app = ws.WebSocketApp(f"ws://{address}:{port}", on_message=recv_message)
+    socket_app.run_forever(dispatcher=rel, reconnect=3)
+
+    # save newly connected socket to list
+    sockets.append(socket_app)
 
     # send hello message
     hello = {
@@ -14,23 +24,40 @@ def connect_server(address, port):
         "public_key": "insert_public_key_here"
     }
 
-    server_socket.send(json.dumps(hello))
-    print(server_socket.recv())
+    socket_app.send(json.dumps(hello))
+    #print(socket_app.recv())
 
 def request_client_list():
-    global server_socket
-
     request = {
         "type": "client_list_request"
     }
 
-    server_socket.send(json.dumps(request))
+    full_response = []
 
-    response = server_socket.recv()
+    for socket in sockets:
 
-    return json.loads(response)
+        socket.send(json.dumps(request))
+        response = socket.recv()
+        json_response = json.loads(response)
 
-def send_test_message():
-    global server_socket
-    server_socket.send("test message")
-    print(server_socket.recv())
+        if json_response["type"] == "client_list":
+            servers = json_response["servers"]
+
+            for server in servers:
+                full_response.append(server)
+
+    return json.loads(full_response)
+
+def start():
+    # connect to all known servers
+    with open("server_list.json") as fp:
+        server_list = json.load(fp)
+
+        for server in server_list["servers"]:
+            connect_server(server["address"], server["port"], sockets)
+    
+    rel.signal(2, rel.abort)
+    rel.dispatch()
+
+if __name__ == '__main__':
+    start()
