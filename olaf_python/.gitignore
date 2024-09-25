@@ -4,3 +4,5 @@ include/
 __pycache__/
 pyvenv.cfg
 .DS_Store
+private.pem
+public.pem
