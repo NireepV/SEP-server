@@ -20,24 +20,43 @@ typedef struct IPAddr{
 typedef struct client{
     addr address;
     int public_key;
+    struct lws *wsi;
 } User;
 
+struct lws *wsiGlobal;
 User *user_list;
-int size = 1;
+int size = 0;
 
 //Adding Clients into Client List
 void add_users(int key, char *address, int port){
-    for(int i = 0; i < size; i++){
-        if(user_list[i].address.ip == NULL){
-            user_list[i].address.ip = address;
-            user_list[i].address.port = port;
-            user_list[i].public_key = key;
-            size++; //increment the size of the list after adding a new client
-            
-            user_list = realloc(user_list, size * sizeof(User)); //There should always be 1 additional empty user
-            break;
-        }
+    int i = size;
+    size++;
+    
+    user_list = realloc(user_list, size * sizeof(User)); //Adding a New Client
+
+    user_list[i].address.ip = address;
+    user_list[i].address.port = port;
+    user_list[i].public_key = key;
+    user_list[i].wsi = wsiGlobal;
+}
+
+//Removing Clients from a Client List
+void remove_users(int index){
+    if(index == size - 1){
+        user_list = realloc(user_list, index * sizeof(User));
+        size--;
+        return;
     }
+    
+    for(int i = index; i < size - 1; i++){
+        user_list[i].address = user_list[i + 1].address;
+        user_list[i].public_key = user_list[i + 1].public_key;
+        user_list[i].wsi = user_list[i + 1].wsi;
+    }
+    user_list = realloc(user_list, (size - 1) * sizeof(User));
+    size--;
+    printf("SIZE AFTER REMOVING: %d\n",size);
+    return;
 }
 
 // WebSocket protocols
@@ -64,31 +83,18 @@ void handle_public_chat_messages(cJSON *data){
 }
 
 char* handle_client_list_request(cJSON *data) {
-    // Create root object
     cJSON *response = cJSON_CreateObject();
-    
-    // Add type field
+
     cJSON_AddStringToObject(response, "type", "client_list");
-    
-    // Create the servers array
     cJSON *servers_array = cJSON_CreateArray();
     
     // Iterate over the user list to create server entries
     for (int i = 0; i < size; i++) {
-        // Create a server object
         cJSON *server = cJSON_CreateObject();
         cJSON_AddStringToObject(server, "address", user_list[i].address.ip); // Add the address of the server
-        
-        // Create clients array for each server
         cJSON *clients_array = cJSON_CreateArray();
-        
-        // Add the client's public key to the clients array
         cJSON_AddItemToArray(clients_array, cJSON_CreateNumber(user_list[i].public_key));
-        
-        // Attach clients array to the server object
         cJSON_AddItemToObject(server, "clients", clients_array);
-        
-        // Add this server object to the servers array
         cJSON_AddItemToArray(servers_array, server);
     }
     
@@ -106,6 +112,7 @@ static int callback_websocket(struct lws *wsi, enum lws_callback_reasons reason,
     
     char *buffer;
     char response[BUFFER_SIZE];
+    wsiGlobal = wsi;
     
     switch (reason) {
         case LWS_CALLBACK_ESTABLISHED:  // When a client connects
@@ -171,6 +178,15 @@ static int callback_websocket(struct lws *wsi, enum lws_callback_reasons reason,
         default:
             break;
     }
+    
+    for(int i = 0; i < size; i++){
+        int test = lws_send_pipe_choked(user_list[i].wsi);
+        if(test == 1){
+            printf("I : %d\n",i);
+            remove_users(i); // Removes Disconnected Client from the Client List which is at the i-th Index.
+        }
+    }
+    
     return 0;
 }
 
