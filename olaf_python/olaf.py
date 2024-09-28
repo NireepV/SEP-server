@@ -94,6 +94,30 @@ def generate_message_signature(data:dict):
 
     return signature
 
+def send_public_message(message: str):
+    global counter, public_key
+
+    hasher = hashlib.sha256()
+    hasher.update(public_key.encode('ascii'))
+    b64_key = base64.b64encode(hasher.hexdigest()).decode('ascii')
+
+    data = {
+        "type": "public_chat",
+        "sender": b64_key,
+        "message": message
+    }
+
+    public_msg = {
+        "type": "signed_data",
+        "data": data,
+        "counter": counter,
+        "signature": generate_message_signature(data)
+    }
+
+    # send to all servers
+    for socket in sockets:
+        socket.send(json.dumps(public_msg))
+
 def send_message(message: str, participant_keys:list[str]):
     global counter 
     
@@ -127,7 +151,6 @@ def send_message(message: str, participant_keys:list[str]):
         hasher.update(key.encode('ascii'))
         participant_hashes.append(hasher.hexdigest())
 
-
         server = known_client_list[key]
         if (server not in server_dests):
             server_dests.append(server)
@@ -154,11 +177,13 @@ def send_message(message: str, participant_keys:list[str]):
         "signature": generate_message_signature(msg_data)
     }
 
+    msg_text = json.dumps(msg) + tag
+
     # send to all destination servers
     for destination in server_dests:
         for socket in sockets:
             if socket.url == "ws://"+destination:
-                socket.send(json.dumps(msg))
+                socket.send(msg_text)
 
     counter += 1
 
