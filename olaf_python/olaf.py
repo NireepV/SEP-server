@@ -21,10 +21,12 @@ counter = 0
 def recv_message(wsapp, message):
     print("Message received from server: " + wsapp.url)
 
+    json_msg = json.loads(message)
+
     # parse message from server
-    match message["type"]:
+    match json_msg["type"]:
         case "client_list":
-            servers = message["servers"]
+            servers = json_msg["servers"]
             for server in servers:
                 address = server["address"]
 
