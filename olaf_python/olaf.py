@@ -5,6 +5,8 @@ import base64
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import serialization, hashes
+from Crypto.Cipher import AES
+from Crypto.Random import get_random_bytes
 import os
 import hashlib
 
@@ -25,13 +27,24 @@ def recv_message(wsapp, message):
 
     # parse message from server
     match json_msg["type"]:
-        case "client_list":
+        case "client_list": # server response for client list
             servers = json_msg["servers"]
             for server in servers:
                 address = server["address"]
 
                 for client_key in server["clients"]:
                     known_client_list[client_key] = address
+
+            send_message('test', [public_key])
+        
+        case "signed_data": # a message
+            messageType = json_msg["data"]["type"]
+
+            match messageType:
+                case "chat":
+                    print("recv normal chat")
+                case "public_chat":
+                    print("recv public chat")
 
 
 def connect_server(address:str, port:str, sockets):
@@ -82,29 +95,56 @@ def generate_message_signature(data:dict):
     return signature
 
 def send_message(message: str, participant_keys:list[str]):
+    global counter 
+    
     # get destination servers & participant key hashes
     server_dests = []
     participant_hashes = []
+    symm_keys = []
 
+    # AES init vector
+    aes_key = get_random_bytes(32)
+    nonce = get_random_bytes(16)
+    cipher = AES.new(aes_key, AES.MODE_GCM, nonce=nonce)
+
+    # calculate hash for all participants
     for key in participant_keys:
+        # calc symm key for participant
+        pub_key = serialization.load_pem_public_key(str.encode(key), backend=default_backend)
+        enc_aes_key = pub_key.encrypt(
+            aes_key,
+            padding=padding.OAEP(
+                mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                algorithm=hashes.SHA256(),
+                label=None
+            )
+        )
+        b64_enc_aes_key = base64.b64encode(enc_aes_key).decode('ascii')
+        symm_keys.append(b64_enc_aes_key)
+
+        # calc sha256 hash for participant key
         hasher = hashlib.sha256()
         hasher.update(key.encode('ascii'))
-        participant_hashes.append(hasher.digest())
+        participant_hashes.append(hasher.hexdigest())
+
 
         server = known_client_list[key]
         if (server not in server_dests):
             server_dests.append(server)
-    
 
+    msg_chat = {
+        "participants": participant_hashes,
+        "message":message
+    }
+
+    chat_cipher, tag = cipher.encrypt_and_digest(json.dumps(msg_chat).encode('ascii'))
+    
     msg_data = {
         "type": "chat",
         "destination_servers": server_dests,
-        "iv":"",
-        "symm_keys": participant_keys,
-        "chat": {
-            "participants": participant_hashes,
-            "message":message
-        }
+        "iv":base64.b64encode(nonce).decode('ascii'),
+        "symm_keys": symm_keys,
+        "chat": chat_cipher
     }
 
     msg = {
@@ -114,9 +154,10 @@ def send_message(message: str, participant_keys:list[str]):
         "signature": generate_message_signature(msg_data)
     }
 
+    # send to all destination servers
     for destination in server_dests:
         for socket in sockets:
-            if socket.url == destination:
+            if socket.url == "ws://"+destination:
                 socket.send(json.dumps(msg))
 
     counter += 1
@@ -171,11 +212,28 @@ def generate_keys(force_regen=False):
 
 def load_keys():
     with open("public.pem", "rb") as f:
-        public = f.read()
-    with open("private.pem", "rb") as f:
-        private = f.read()
+        public = serialization.load_pem_public_key(
+            f.read()
+        )
 
-    return private, public
+        public_serial = public.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+        ).decode('ascii')
+
+    with open("private.pem", "rb") as f:
+        private = serialization.load_pem_private_key(
+            f.read(),
+            password=None,
+        )
+
+        private_serial = private.private_bytes(
+            encoding=serialization.Encoding.PEM,  
+            format=serialization.PrivateFormat.PKCS8,  
+            encryption_algorithm=serialization.NoEncryption() 
+        ).decode('ascii')
+
+    return private_serial, public_serial
 
 def start():
     # generate keys!
@@ -183,9 +241,7 @@ def start():
 
     # load keys!
     global private_key, public_key
-    b_private_key, b_public_key = load_keys()
-    private_key = b_private_key.decode('utf-8')
-    public_key = b_public_key.decode('utf-8')
+    private_key, public_key = load_keys()
 
     # connect to all known servers
     with open("server_list.json") as fp:
