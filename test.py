@@ -35,6 +35,7 @@ async def chat(port):
         }
     
         await websocket.send(json.dumps(hello))
+        print(key)
         print("REQUESTING THE CLIENT LIST")
         
         await websocket.send(json.dumps(list_clients))
