@@ -151,7 +151,7 @@ def send_message(message: str, participant_keys:list[str]):
         hasher.update(key.encode('ascii'))
         participant_hashes.append(hasher.hexdigest())
 
-        server = known_client_list[key]
+        server = "127.0.0.1:8080"#known_client_list[key]
         if (server not in server_dests):
             server_dests.append(server)
 
@@ -167,7 +167,7 @@ def send_message(message: str, participant_keys:list[str]):
         "destination_servers": server_dests,
         "iv":base64.b64encode(nonce).decode('ascii'),
         "symm_keys": symm_keys,
-        "chat": chat_cipher
+        "chat": base64.b64encode(chat_cipher).decode('ascii')
     }
 
     msg = {
@@ -176,8 +176,8 @@ def send_message(message: str, participant_keys:list[str]):
         "counter":counter,
         "signature": generate_message_signature(msg_data)
     }
-
-    msg_text = json.dumps(msg) + tag
+    
+    msg_text = json.dumps(msg) + str(tag)
 
     # send to all destination servers
     for destination in server_dests:
