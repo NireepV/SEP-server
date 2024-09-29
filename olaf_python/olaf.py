@@ -155,6 +155,11 @@ def send_message(message: str, participant_keys:list[str]):
         if (server not in server_dests):
             server_dests.append(server)
 
+    # add sender as first participant
+    hasher = hashlib.sha256()
+    hasher.update(public_key.encode('ascii'))
+    participant_hashes.insert(0, hasher.hexdigest())
+
     msg_chat = {
         "participants": participant_hashes,
         "message":message
