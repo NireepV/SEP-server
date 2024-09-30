@@ -46,20 +46,47 @@ async def chat(port):
         while True:
             message = await get_user_input()
             
-            formatted_Message = {
-                "type": "signed_data",
-                "data": {
-                        "type": "public_chat",
-                        "sender": fingerprint,
-                        "message": message
+            if message.find("public:") == -1 :
+                formatted_Message = {
+                    "type": "signed_data",
+                    "data": {
+                        "type": "chat",
+                        "destination_servers": [
+                            "127.0.0.1:8080"
+                        ],
+                        "iv": "<Base64 encoded (AES initialisation vector)>",
+                        "symm_keys": [
+                            "<Base64 encoded (AES key encrypted with recipient's public RSA key)>",
+                        ],
+                        "chat": {
+                                "participants": [
+                                    "<Fingerprint of sender comes first>",
+                                    "<Fingerprints of recipients>",
+                                ],
+                                "message": message
+                            }
                     },
-                "counter": counter,
-                "signature": "<Base64 signature of data + counter>"
-            }
-            
+                    "counter": counter,
+                    "signature": "<Base64 signature of data + counter>"
+                }
+                
+                await websocket.send(json.dumps(formatted_Message))
+                
+            else:
+                formatted_Message = {
+                    "type": "signed_data",
+                    "data": {
+                            "type": "public_chat",
+                            "sender": fingerprint,
+                            "message": message
+                        },
+                    "counter": counter,
+                    "signature": "<Base64 signature of data + counter>"
+                }
+                
+                await websocket.send(json.dumps(formatted_Message))
+
             counter += 1
-            
-            await websocket.send(json.dumps(formatted_Message))
 
 
 async def receive_messages(websocket):

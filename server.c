@@ -26,7 +26,7 @@ static const int base64_reverse_table[256] = {
     ['9'] = 61, ['+'] = 62, ['/'] = 63
 };
 
-// Setting Up Client List
+// Setting Up Client and Server Lists
 typedef struct client{
     char *ip;
     int port;
@@ -37,6 +37,7 @@ typedef struct client{
 typedef struct server{
     char *ip;
     int port;
+    struct lws *wsi;
 } Server;
 
 struct lws_context *context;
@@ -44,7 +45,7 @@ User *general_user_list;
 User *local_user_list;
 Server *server_list;
 int size = 0;
-int numServers = 1;
+int numServers = 2;
 
 
 // Function to encode a C string to Base64
@@ -124,16 +125,16 @@ char* return_addr(char *ip, int port){
 
 // Function to connect to a remote client
 struct lws *connect_to_client(const char *ip, int port) {
+    
+    char *addr = return_addr((char *)ip, port);
+    
     struct lws_client_connect_info connect_info = {
         .context = context,
         .address = ip,
         .port = port,
         .path = "/",  // Path for WebSocket handshake
-        .host = ip,
-        .origin = ip,
+        .host = addr,
         .protocol = "ws-protocol",  // Protocol to use
-        .ssl_connection = 0,
-        .ietf_version_or_minus_one = -1  // Use latest WebSocket version
     };
 
     struct lws *client_wsi = lws_client_connect_via_info(&connect_info);
@@ -195,10 +196,13 @@ void handle_hello_messages(cJSON *data , struct lws *wsi){
 }
 
 void handle_chat_messages(cJSON *json, cJSON *data) {
+    printf("PRIVATE CHAT \n");
     cJSON *dest_servers = cJSON_GetObjectItemCaseSensitive(data, "destination_servers");
     
     // Iterate over the destination servers array
     int server_count = cJSON_GetArraySize(dest_servers);
+    
+    printf("%d DESTINATION SERVERS : %s\n", server_count, cJSON_Print(dest_servers));
     for (int i = 0; i < server_count; i++) {
         cJSON *addr = cJSON_GetArrayItem(dest_servers, i);
         
@@ -210,20 +214,18 @@ void handle_chat_messages(cJSON *json, cJSON *data) {
                 char *response = cJSON_Print(json);
                 lws_write(local_user_list[j].wsi, (unsigned char *)response, strlen(response), LWS_WRITE_TEXT);
                 printf("Message sent to local client %d\n", j);
-                free(response);
             }
         } else {
             // Forward the message to the destination server
-            printf("Forwarding message to server: %s\n", addr->valuestring);
             char *server_ip = strtok(addr->valuestring, ":");
             int server_port = atoi(strtok(NULL, ":"));
             
             struct lws *client_wsi = connect_to_client(server_ip, server_port);
+            printf("Forwarding message to server: %s:%d\n", server_ip,server_port);
             if (client_wsi) {
                 char *response = cJSON_Print(json);
                 lws_write(client_wsi, (unsigned char *)response, strlen(response), LWS_WRITE_TEXT);
                 printf("Message forwarded to server: %s\n", addr->valuestring);
-                free(response);
             } else {
                 printf("Failed to connect to server: %s\n", addr->valuestring);
             }
@@ -291,6 +293,24 @@ char* handle_client_list_request() {
     return json_string;
 }
 
+// Handling Server Hello Messages
+void handle_server_hello(cJSON *data) {
+    cJSON *sender = cJSON_GetObjectItemCaseSensitive(data, "sender");
+    if (sender != NULL) {
+        char *server_ip = strtok(sender->valuestring, ":");
+        char* port = strtok(NULL, ":");
+        int server_port;
+        if(port != NULL){
+            server_port = atoi(port);
+        } else {
+            server_port = 80;
+        }
+        
+        printf("Received server_hello from server: %s\n", sender->valuestring);
+    }
+}
+
+
 // WebSocket callback function
 static int callback_websocket(struct lws *wsi, enum lws_callback_reasons reason, void *user, void *in, size_t len) {
     
@@ -325,15 +345,13 @@ static int callback_websocket(struct lws *wsi, enum lws_callback_reasons reason,
                     }
                     else if(strcmp(jType->valuestring , "chat") == 0)
                     {
-                        printf("MESSAGE RECIEVED : %s\n",cJSON_Print(json));
-                        
-                        // Respond to the Client
-                        snprintf(response, sizeof(response), "Server is responding to a Private Message ^_^");
-                        lws_write(wsi, (unsigned char *)response, strlen(response), LWS_WRITE_TEXT);
+                        handle_chat_messages(json, jData);
                     }
                     else if(strcmp(jType->valuestring , "public_chat") == 0)
                     {
                         handle_public_chat_messages(json, jData);
+                    } else if (strcmp(jType->valuestring, "server_hello") == 0) {
+                        handle_server_hello(jData);
                     }
                 }
                 else if(strcmp(jData->valuestring,"client_list_request") == 0)
@@ -405,10 +423,14 @@ int main() {
     server_list = (Server *) malloc(numServers * sizeof(Server));
     server_list[0].ip = "127.0.0.1";
     server_list[0].port = 8080;
+    server_list[1].ip = "127.0.0.1";
+    server_list[1].port = 9090;
 
+    connect_to_client("127.0.0.1", 9090);
+    
     // Run the WebSocket server loop
     while (1) {
-        lws_service(context, 50);  // Run the event loop for 1 second intervals
+        lws_service(context, 50);
     }
 
     // Clean up the WebSocket context
