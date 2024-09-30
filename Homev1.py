@@ -1,6 +1,7 @@
 import tkinter as tk
 import subprocess
 import threading
+import olaf_python.olaf as chat
 
 # start up and restart work as intended. start up must still figure out how to connect to active clients list.
 # click on a button to open a chatroom to that client. could also have a broadcast chat.
