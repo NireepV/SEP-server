@@ -65,7 +65,6 @@ async def chat(port):
 async def receive_messages(websocket):
     while True:
         response = await websocket.recv()
-        # Clear the current line and print the incoming message
         sys.stdout.write("\r" + " " * 50 + "\r")  # Clear the line
         print(f"Received: {response}")
         sys.stdout.write("Enter message: ")

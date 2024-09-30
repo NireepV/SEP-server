@@ -10,6 +10,7 @@
 
 #define PORT 8080
 #define BUFFER_SIZE 2048
+#define SERVER_ADDR "127.0.0.1:8080"
 
 // Base64 encoding table
 static const char base64_table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -39,7 +40,8 @@ typedef struct server{
 } Server;
 
 struct lws_context *context;
-User *user_list;
+User *general_user_list;
+User *local_user_list;
 Server *server_list;
 int size = 0;
 int numServers = 1;
@@ -151,12 +153,12 @@ void add_users(char* key, char *address, int port, struct lws *wsi){
     int i = size;
     size++;
     
-    user_list = realloc(user_list, size * sizeof(User));    
+    local_user_list = realloc(local_user_list, size * sizeof(User));    
     
-    user_list[i].ip = strdup(address);
-    user_list[i].port = port;
-    user_list[i].public_key = strdup(key);
-    user_list[i].wsi = wsi;
+    local_user_list[i].ip = strdup(address);
+    local_user_list[i].port = port;
+    local_user_list[i].public_key = strdup(key);
+    local_user_list[i].wsi = wsi;
     
     printf("SIZE AFTER ADDING: %d\n",size);
 }
@@ -165,18 +167,18 @@ void add_users(char* key, char *address, int port, struct lws *wsi){
 //Removing Clients from a Client List
 void remove_users(int index){
     if(index == size - 1){
-        user_list = realloc(user_list, index * sizeof(User));
+        local_user_list = realloc(local_user_list, index * sizeof(User));
         size--;
         return;
     }
     
     for(int i = index; i < size - 1; i++){
-        user_list[i].ip = user_list[i + 1].ip;
-        user_list[i].port = user_list[i + 1].port;
-        user_list[i].public_key = user_list[i + 1].public_key;
-        user_list[i].wsi = user_list[i + 1].wsi;
+        local_user_list[i].ip = local_user_list[i + 1].ip;
+        local_user_list[i].port = local_user_list[i + 1].port;
+        local_user_list[i].public_key = local_user_list[i + 1].public_key;
+        local_user_list[i].wsi = local_user_list[i + 1].wsi;
     }
-    user_list = realloc(user_list, (size - 1) * sizeof(User));
+    local_user_list = realloc(local_user_list, (size - 1) * sizeof(User));
     size--;
     printf("SIZE AFTER REMOVING: %d\n",size);
     return;
@@ -192,11 +194,41 @@ void handle_hello_messages(cJSON *data , struct lws *wsi){
     add_users(key->valuestring, "127.0.0.1", PORT, wsi);
 }
 
-void handle_chat_messages(cJSON *json, cJSON *data){
-    cJSON *symm_keys = cJSON_GetObjectItemCaseSensitive(json, "symm_keys");
+void handle_chat_messages(cJSON *json, cJSON *data) {
+    cJSON *dest_servers = cJSON_GetObjectItemCaseSensitive(data, "destination_servers");
     
-    
-    
+    // Iterate over the destination servers array
+    int server_count = cJSON_GetArraySize(dest_servers);
+    for (int i = 0; i < server_count; i++) {
+        cJSON *addr = cJSON_GetArrayItem(dest_servers, i);
+        
+        // Check if the destination server is the current server
+        if (strcmp(addr->valuestring, SERVER_ADDR) == 0) {
+            printf("Message is for the current server. Broadcasting to local clients...\n");
+            // Broadcast to all local clients
+            for (int j = 0; j < size; j++) {
+                char *response = cJSON_Print(json);
+                lws_write(local_user_list[j].wsi, (unsigned char *)response, strlen(response), LWS_WRITE_TEXT);
+                printf("Message sent to local client %d\n", j);
+                free(response);
+            }
+        } else {
+            // Forward the message to the destination server
+            printf("Forwarding message to server: %s\n", addr->valuestring);
+            char *server_ip = strtok(addr->valuestring, ":");
+            int server_port = atoi(strtok(NULL, ":"));
+            
+            struct lws *client_wsi = connect_to_client(server_ip, server_port);
+            if (client_wsi) {
+                char *response = cJSON_Print(json);
+                lws_write(client_wsi, (unsigned char *)response, strlen(response), LWS_WRITE_TEXT);
+                printf("Message forwarded to server: %s\n", addr->valuestring);
+                free(response);
+            } else {
+                printf("Failed to connect to server: %s\n", addr->valuestring);
+            }
+        }
+    }
 }
 
 void handle_public_chat_messages(cJSON *json, cJSON *data){
@@ -209,13 +241,13 @@ void handle_public_chat_messages(cJSON *json, cJSON *data){
     for(int i = 0; i < size; i++){
         
         unsigned char fingerprint[SHA256_DIGEST_LENGTH];
-        SHA256((unsigned char *)user_list[i].public_key, strlen(user_list[i].public_key), fingerprint); // This is the SHA256 Fingerprint of the Client[i] in the list of Clients
+        SHA256((unsigned char *)local_user_list[i].public_key, strlen(local_user_list[i].public_key), fingerprint); // This is the SHA256 Fingerprint of the Client[i] in the list of Clients
         
         if( memcmp(fingerprint, decoded, SHA256_DIGEST_LENGTH) != 0 ){
             char response[BUFFER_SIZE];
             snprintf(response, sizeof(response), "%s", cJSON_Print(json));
-            struct lws *client_wsi = user_list[i].wsi;
-            lws_write(user_list[i].wsi, (unsigned char *)response, strlen(response), LWS_WRITE_TEXT);
+            struct lws *client_wsi = local_user_list[i].wsi;
+            lws_write(local_user_list[i].wsi, (unsigned char *)response, strlen(response), LWS_WRITE_TEXT);
             
             printf("MESSAGE SENT TO USER %d :}\n", i);
         }
@@ -240,10 +272,9 @@ char* handle_client_list_request() {
         cJSON *clients_array = cJSON_CreateArray(); // Each Client Which Belongs to This Server
         
         for(int j = 0; j < size; j++){
-            char *client_addr = return_addr(user_list[j].ip, user_list[j].port);   
+            char *client_addr = return_addr(local_user_list[j].ip, local_user_list[j].port);   
             if(strcmp(client_addr, server_addr) == 0){
-                printf("KEY IS %s\n",user_list[j].public_key);
-                cJSON_AddItemToArray(clients_array, cJSON_CreateString(user_list[j].public_key));
+                cJSON_AddItemToArray(clients_array, cJSON_CreateString(local_user_list[j].public_key));
             }
         }
         
@@ -294,7 +325,7 @@ static int callback_websocket(struct lws *wsi, enum lws_callback_reasons reason,
                     }
                     else if(strcmp(jType->valuestring , "chat") == 0)
                     {
-                        printf("MESSAGE RECIEVED : CHAT\n");
+                        printf("MESSAGE RECIEVED : %s\n",cJSON_Print(json));
                         
                         // Respond to the Client
                         snprintf(response, sizeof(response), "Server is responding to a Private Message ^_^");
@@ -320,7 +351,7 @@ static int callback_websocket(struct lws *wsi, enum lws_callback_reasons reason,
 
         case LWS_CALLBACK_CLOSED:  // When a client disconnects
             for(int i = 0; i < size; i++){
-                if (user_list[i].wsi == wsi){
+                if (local_user_list[i].wsi == wsi){
                     remove_users(i);
                     printf("Removed user at index %d\n", i);
                     break; // Assuming wsi is unique
@@ -370,7 +401,7 @@ int main() {
     printf("WebSocket server started on port %d\n", PORT);
     
     // Allocating Memory for Client List
-    user_list = (User *) malloc(size * sizeof(User));
+    local_user_list = (User *) malloc(size * sizeof(User));
     server_list = (Server *) malloc(numServers * sizeof(Server));
     server_list[0].ip = "127.0.0.1";
     server_list[0].port = 8080;
@@ -383,7 +414,7 @@ int main() {
     // Clean up the WebSocket context
     lws_context_destroy(context);
     
-    free(user_list);
+    free(local_user_list);
     free(server_list);
 
     return 0;
