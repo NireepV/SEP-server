@@ -9,6 +9,8 @@ from Crypto.Cipher import AES
 from Crypto.Random import get_random_bytes
 import os
 import hashlib
+import tkinter as tk
+from threading import Thread
 
 sockets:list[ws.WebSocketApp] = []
 known_client_list = {}
@@ -99,7 +101,7 @@ def send_public_message(message: str):
 
     hasher = hashlib.sha256()
     hasher.update(public_key.encode('ascii'))
-    b64_key = base64.b64encode(hasher.hexdigest()).decode('ascii')
+    b64_key = base64.b64encode(hasher.digest()).decode('ascii')
 
     data = {
         "type": "public_chat",
@@ -151,7 +153,7 @@ def send_message(message: str, participant_keys:list[str]):
         hasher.update(key.encode('ascii'))
         participant_hashes.append(hasher.hexdigest())
 
-        server = "127.0.0.1:8080"#known_client_list[key]
+        server = known_client_list[key]
         if (server not in server_dests):
             server_dests.append(server)
 

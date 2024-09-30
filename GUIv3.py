@@ -2,6 +2,7 @@ import tkinter as tk
 import subprocess
 import threading
 import sys
+import olaf_python.olaf as chat
 #app is intended to start from Homev1.py
 
 main = tk.Tk()
