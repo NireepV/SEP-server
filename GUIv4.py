@@ -61,10 +61,8 @@ sndbtn = tk.Button(etry_frame, text="Send", command=send, cursor="hand2")
 main.bind('<Return>',enter) #send message if enter key pressed
 
 def select_file():
-    filetypes = (('All files', '*.*'),)
-    filename = fd.askopenfilename(title='Open a file', initialdir='/', filetypes=filetypes)
-    if filename:
-        showinfo(title='Selected File', message=filename)
+    filename = fd.askopenfiles(mode="r", parent=main, filetypes=[("Any files", "*.*"), ("Text files", "*.jpg *.png *.jpeg")])
+    showinfo(title='Selected File', message=filename)
 
 # open button
 open_button = tk.Button(etry_frame, text='File Open', command=select_file)
