@@ -45,8 +45,28 @@ async def chat(port):
 
         while True:
             message = await get_user_input()
-            
-            if message.find("public:") == -1 :
+            if message.find("client update:") != -1:
+                formatted_Message = {
+                    "type": "client_update",
+                }
+                
+                await websocket.send(json.dumps(formatted_Message))
+                
+            elif message.find("public:") != -1 :
+                formatted_Message = {
+                    "type": "signed_data",
+                    "data": {
+                            "type": "public_chat",
+                            "sender": fingerprint,
+                            "message": message
+                        },
+                    "counter": counter,
+                    "signature": "<Base64 signature of data + counter>"
+                }
+                
+                await websocket.send(json.dumps(formatted_Message))
+                
+            else:
                 formatted_Message = {
                     "type": "signed_data",
                     "data": {
@@ -66,20 +86,6 @@ async def chat(port):
                                 "message": message
                             }
                     },
-                    "counter": counter,
-                    "signature": "<Base64 signature of data + counter>"
-                }
-                
-                await websocket.send(json.dumps(formatted_Message))
-                
-            else:
-                formatted_Message = {
-                    "type": "signed_data",
-                    "data": {
-                            "type": "public_chat",
-                            "sender": fingerprint,
-                            "message": message
-                        },
                     "counter": counter,
                     "signature": "<Base64 signature of data + counter>"
                 }

@@ -78,14 +78,6 @@ def add_server(address, port):
 
 
 
-# Remove a user from the local user list
-def remove_user(websocket):
-    global local_user_list
-    local_user_list = [user for user in local_user_list if user.websocket != websocket]
-    print(f"User removed. Total users: {len(local_user_list)}")
-
-
-
 # Handle hello messages
 async def handle_hello_messages(data, websocket):
     public_key = data["public_key"]
@@ -127,6 +119,20 @@ async def handle_public_chat_messages(message, websocket):
 
 
 
+# Handle public chat messages
+async def send_client_update():
+    response = {
+        "type": "client_update",
+        "clients": []
+    }
+
+    for user in local_user_list:
+        response["clients"].append(user.public_key)
+    
+    for user in local_user_list:
+        await user.websocket.send(json.dumps(response, indent=4))
+
+
 # Handle client list request
 async def handle_client_list_request(websocket):
     response = {
@@ -150,6 +156,27 @@ async def handle_client_list_request(websocket):
 
 
 
+# Function to ping users and remove inactive ones
+async def ping_and_remove_inactive_users():
+    global local_user_list
+    active_users = []
+
+    for user in local_user_list:
+        try:
+            # Send a ping and wait for a pong response (with a timeout)
+            await user.websocket.ping()
+            await asyncio.wait_for(user.websocket.pong(), timeout=5)
+            active_users.append(user)  # Add user to active users if pong is received
+        except asyncio.TimeoutError:
+            print(f"User {user.ip}:{user.port} did not respond to ping. Removing...")
+        except websockets.exceptions.ConnectionClosed:
+            print(f"User {user.ip}:{user.port} disconnected. Removing...")
+    
+    local_user_list = active_users  # Update local_user_list with only active users
+    print(f"Updated user list. Total active users: {len(local_user_list)}")
+
+
+
 # Handling incoming messages
 async def handle_message(message, websocket):
     data = json.loads(message)
@@ -158,22 +185,33 @@ async def handle_message(message, websocket):
         msg_type = data["data"]["type"]
         if msg_type == "hello":
             await handle_hello_messages(data["data"], websocket)
+            await send_client_update()
         elif msg_type == "chat":
             await handle_chat_messages(message, data["data"])
         elif msg_type == "public_chat":
             await handle_public_chat_messages(message, websocket)
     elif data["type"] == "client_list_request":
         await handle_client_list_request(websocket)
-# NEED TO FIGURE OUT HOW TO REMOVE CLIENTS
+    elif data["type"] == "client_update":
+        await send_client_update()
+    
+    
+    size = len(local_user_list)
+    await ping_and_remove_inactive_users()
+    if len(local_user_list) < size :
+        print("Sending Client Update after removing user")
+        await send_client_update()
+
 
 
 # WebSocket server handler
 async def websocket_handler(websocket):
-    try:
+    try: 
         async for message in websocket:
             await handle_message(message, websocket)
     except websockets.exceptions.ConnectionClosed:
-        remove_user(websocket)
+        await ping_and_remove_inactive_users()
+        await send_client_update()
 
 
 
