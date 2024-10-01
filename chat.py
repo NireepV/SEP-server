@@ -1,6 +1,5 @@
 import websocket as ws
 import json
-import rel
 import base64
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
@@ -82,6 +81,78 @@ class Chat(tk.Tk):
         
         for socket in self.sockets:
             socket.send(json.dumps(public_msg))
+
+    def send_message(self, message: str, participant_keys:list[str]):
+        # get destination servers & participant key hashes
+        server_dests = []
+        participant_hashes = []
+        symm_keys = []
+
+        # AES init vector
+        aes_key = get_random_bytes(32)
+        nonce = get_random_bytes(16)
+        cipher = AES.new(aes_key, AES.MODE_GCM, nonce=nonce)
+
+        # calculate hash for all participants
+        for key in participant_keys:
+            # calc symm key for participant
+            pub_key = serialization.load_pem_public_key(str.encode(key), backend=default_backend)
+            enc_aes_key = pub_key.encrypt(
+                aes_key,
+                padding=padding.OAEP(
+                    mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                    algorithm=hashes.SHA256(),
+                    label=None
+                )
+            )
+            b64_enc_aes_key = base64.b64encode(enc_aes_key).decode('ascii')
+            symm_keys.append(b64_enc_aes_key)
+
+            # calc sha256 hash for participant key
+            hasher = hashlib.sha256()
+            hasher.update(key.encode('ascii'))
+            participant_hashes.append(hasher.hexdigest())
+
+            server = self.known_client_list[key]
+            if (server not in server_dests):
+                server_dests.append(server)
+
+        # add sender as first participant
+        hasher = hashlib.sha256()
+        hasher.update(self.public_key.encode('ascii'))
+        participant_hashes.insert(0, hasher.hexdigest())
+
+        msg_chat = {
+            "participants": participant_hashes,
+            "message":message
+        }
+
+        chat_cipher, tag = cipher.encrypt_and_digest(json.dumps(msg_chat).encode('ascii'))
+        
+        msg_data = {
+            "type": "chat",
+            "destination_servers": server_dests,
+            "iv":base64.b64encode(nonce).decode('ascii'),
+            "symm_keys": symm_keys,
+            "chat": base64.b64encode(chat_cipher).decode('ascii')
+        }
+
+        msg = {
+            "type": "signed_data",
+            "data": msg_data,
+            "counter": self.counter,
+            "signature": self.generate_message_signature(msg_data)
+        }
+        
+        msg_text = json.dumps(msg) + str(tag)
+
+        # send to all destination servers
+        for destination in server_dests:
+            for socket in self.sockets:
+                if socket.url == "ws://"+destination:
+                    socket.send(msg_text)
+
+        self.counter += 1
     
     def connection_made(self, wsapp):
         data = {
