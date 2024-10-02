@@ -35,8 +35,8 @@ class Server:
         self.port = port
 
 
-local_user_list = []
-global_user_list = []
+local_user_list:list[User] = []
+global_user_list:list[GlobalUser] = []
 server_list = []
 
 
@@ -75,13 +75,16 @@ def return_addr(ip, port):
 def local_add_user(public_key, address, port, websocket):
     local_user_list.append(User(address, port, public_key, websocket))
     print(f"User added. Total Users in Local List: {len(local_user_list)}")
-    global_add_user(address, port, public_key)
-
-
+    global_add_user(public_key, address, port)
 
 # Add users to the local user list
 def global_add_user(public_key, address, port):
-    global_user_list.append(GlobalUser(address, port, public_key))
+    global_user = GlobalUser(address, port, public_key)
+    
+    for g_user in global_user_list: # dont add user already here
+        if g_user.public_key == public_key: return
+
+    global_user_list.append(global_user)
     print(f"User added. Total Users in Global List: {len(global_user_list)}")
 
 
@@ -121,18 +124,18 @@ async def handle_hello_messages(data, websocket):
 
 
 # Handle chat messages
-async def handle_chat_messages(message, data):
+async def handle_chat_messages(message, data, tag):
     destination_servers = data["destination_servers"]
     for server_addr in destination_servers:
         if server_addr == SERVER_ADDR:
             print("Message is for the current server. Broadcasting to local clients...")
             for user in local_user_list:
-                await user.websocket.send(message)
+                await user.websocket.send(message+tag)
         else:
             print("Sending to Other Servers")
             server_url = f"ws://{server_addr}"
             async with websockets.connect(server_url) as ws:
-                await ws.send(message)
+                await ws.send(message+tag)
             print(f"Sent to Server {server_addr}")
 
 
@@ -282,7 +285,12 @@ async def connect_to_neighbors():
 
 
 # Handling incoming messages
-async def handle_message(message, websocket):
+async def handle_message(message:str, websocket):
+    if (message[-1] != '}'):
+        tag = message[message.rindex('}')+1:len(message)]
+        print(tag)
+        message = message[:message.rindex('}')+1]
+
     data = json.loads(message)
 
     if data["type"] == "signed_data":
@@ -291,7 +299,7 @@ async def handle_message(message, websocket):
             await handle_hello_messages(data["data"], websocket)
             await send_client_update()
         elif msg_type == "chat":
-            await handle_chat_messages(message, data["data"])
+            await handle_chat_messages(message, data["data"], tag)
         elif msg_type == "public_chat":
             await handle_public_chat_messages(message, websocket)
     elif data["type"] == "client_list_request":
