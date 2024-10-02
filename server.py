@@ -12,6 +12,7 @@ from cryptography.hazmat.backends import default_backend
 PORT = 8080
 BUFFER_SIZE = 2048
 SERVER_ADDR = "127.0.0.1:8080"
+counter = 0
 
 
 # Setting Up User and Server Lists
@@ -22,6 +23,12 @@ class User:
         self.public_key = public_key
         self.websocket = websocket
 
+class GlobalUser:
+    def __init__(self, ip, port, public_key):
+        self.ip = ip
+        self.port = port
+        self.public_key = public_key
+
 class Server:
     def __init__(self, ip, port):
         self.ip = ip
@@ -29,8 +36,8 @@ class Server:
 
 
 local_user_list = []
+global_user_list = []
 server_list = []
-num_servers = 2
 
 
 
@@ -64,10 +71,18 @@ def return_addr(ip, port):
 
 
 
-# Add users to the local user list
-def add_user(public_key, address, port, websocket):
+# Add users to the local user list and global user list
+def local_add_user(public_key, address, port, websocket):
     local_user_list.append(User(address, port, public_key, websocket))
-    print(f"User added. Total users: {len(local_user_list)}")
+    print(f"User added. Total Users in Local List: {len(local_user_list)}")
+    global_add_user(address, port, public_key)
+
+
+
+# Add users to the local user list
+def global_add_user(public_key, address, port):
+    global_user_list.append(GlobalUser(address, port, public_key))
+    print(f"User added. Total Users in Global List: {len(global_user_list)}")
 
 
 
@@ -78,11 +93,30 @@ def add_server(address, port):
 
 
 
+# Send Server Hello messages
+async def send_server_hello(websocket):
+    global counter
+    
+    message = {
+        "type": "signed_data",
+        "data": {
+                "type": "server_hello",
+                "sender": "<server IP connecting>"
+           },
+        "counter": counter,
+        "signature": "<Base64 encoded (signature of (data JSON concatenated with counter))>"
+    }
+    
+    counter = counter + 1
+    await websocket.send(json.dumps(message))
+
+
+
 # Handle hello messages
 async def handle_hello_messages(data, websocket):
     public_key = data["public_key"]
     print(f"Received public key: {public_key}")
-    add_user(public_key, "127.0.0.1", PORT, websocket)
+    local_add_user(public_key, "127.0.0.1", PORT, websocket)
 
 
 
@@ -119,7 +153,7 @@ async def handle_public_chat_messages(message, websocket):
 
 
 
-# Handle public chat messages
+# Send Client Updates
 async def send_client_update():
     response = {
         "type": "client_update",
@@ -129,8 +163,46 @@ async def send_client_update():
     for user in local_user_list:
         response["clients"].append(user.public_key)
     
-    for user in local_user_list:
-        await user.websocket.send(json.dumps(response, indent=4))
+    for server in server_list:
+        addr = f"{server.ip}:{server.port}"
+        if addr != SERVER_ADDR:
+            async with websockets.connect(f"ws://{addr}") as ws:
+                await ws.send(json.dumps(response, indent=4))
+
+
+
+# Send Client Updates
+async def handle_client_update(data, websocket):
+    print(f"Received client update from a server.")
+
+    # Extract the list of client public keys from the update
+    client_keys = data["clients"]
+
+    # Identify the server that sent the update (IP and port)
+    print(f"Update received from server {websocket.remote_address[0]}:{websocket.remote_address[1]}")
+
+    # Remove any existing clients from global_user_list that are associated with this server
+    global global_user_list
+    global_user_list = [user for user in global_user_list if not (user.ip == websocket.remote_address[0] and user.port == websocket.remote_address[1])]
+    
+    # Add the new clients from the update, marking them as associated with this server
+    for key in client_keys:
+        print(f"Adding client with public key: {key}")
+        global_add_user(key, websocket.remote_address[0], websocket.remote_address[1])
+  
+    print(f"Updated global user list. Total users: {len(global_user_list)}")
+
+
+
+# Server Sending Client Update Requests to Other Servers
+async def server_client_update_request(websocket):
+    print("SENDING SERVER REQUEST")
+    message = {
+        "type": "client_update_request"
+    }
+
+    await websocket.send(json.dumps(message, indent=4))
+
 
 
 # Handle client list request
@@ -173,7 +245,39 @@ async def ping_and_remove_inactive_users():
             print(f"User {user.ip}:{user.port} disconnected. Removing...")
     
     local_user_list = active_users  # Update local_user_list with only active users
-    print(f"Updated user list. Total active users: {len(local_user_list)}")
+    
+    if len(local_user_list) > 0:
+        
+        local_user = local_user_list[0]
+        
+        for user in global_user_list:
+            if (user.ip == local_user.ip and user.port == local_user.port):
+                global_user_list.remove(user)
+                print(f"Global User List Size : {len(global_user_list)}")
+                
+        for user in local_user_list:
+            global_add_user(user.public_key, user.ip, user.port)
+            print(f"Global User List Size : {len(global_user_list)}");
+
+
+
+# Connect to Other Servers on Startup
+async def connect_to_neighbors():
+    global server_list
+    print("Connecting to neighbors...")
+
+    for server in server_list:
+        addr = f"{server.ip}:{server.port}"
+        if addr != SERVER_ADDR:
+            server_url = f"ws://{addr}"
+            async with websockets.connect(server_url) as ws:
+                server.websocket = ws
+
+                # Send "hello" message
+                await send_server_hello(ws)
+                
+                # Send "client_update_request" message
+                await server_client_update_request(ws)
 
 
 
@@ -193,7 +297,9 @@ async def handle_message(message, websocket):
     elif data["type"] == "client_list_request":
         await handle_client_list_request(websocket)
     elif data["type"] == "client_update":
-        await send_client_update()
+        await handle_client_update(data, websocket) 
+    elif data["type"] == "startup":
+        await connect_to_neighbors()
     
     
     size = len(local_user_list)
@@ -220,6 +326,7 @@ async def start_server():
     add_server("127.0.0.1", 8080)
     server = await websockets.serve(websocket_handler, "127.0.0.1", PORT)
     print(f"WebSocket server started on port {PORT}")
+    #asyncio.create_task(connect_to_neighbors())
     await server.wait_closed()
 
 if __name__ == "__main__":
